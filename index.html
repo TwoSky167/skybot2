@@ -286,7 +286,7 @@
 
   <div class="api-box">
     <label for="apiKey">Gemini API 키</label>
-    <input type="password" id="apiKey" placeholder="여기에 Gemini API 키를 입력하세요 (브라우저에만 저장됨)" value="">
+    <input type="password" id="apiKey" placeholder="Vercel 배포 시 비워두세요 (환경변수 사용). 로컬에서만 입력" value="">
   </div>
 
   <div class="search-box">
@@ -453,9 +453,9 @@
           var safeLink = a.link || "";
           var link = safeLink ? ("<a href=\"" + safeLink + "\" target=\"_blank\" rel=\"noopener\">" + safeTitle + "</a>") : safeTitle;
           var meta = a.published ? "<span class=\"meta\">" + escapeHtml(a.published) + "</span>" : "";
-          var summaryBlockId = "summary-block-" + i;
+          var summaryBlockId = "summary_block_" + i;
           var summaryBlock = (
-            "<div class=\"summary-block\" id=\"" + summaryBlockId + "\">" +
+            "<div class=\"summary-block\" id=\"" + summaryBlockId + "\" data-summary-block=\"" + i + "\">" +
             "<div class=\"label\">본문 기반 요약</div>" +
             "<p class=\"summary summary-loading\">본문을 읽고 요약하는 중…</p>" +
             "</div>"
@@ -618,52 +618,51 @@
           });
       }
 
-      // ===== Gemini API 공통 호출 =====
+      // ===== Gemini API 공통 호출 (서버 API 우선, 실패 시 클라이언트 키 사용) =====
+      var GEMINI_API_ROUTE = "/api/gemini";
+
       function getApiKey() {
-        var key = document.getElementById("apiKey").value.trim();
-        if (!key) {
-          alert("먼저 상단에 Gemini API 키를 입력해 주세요.");
-          return null;
-        }
-        return key;
+        var el = document.getElementById("apiKey");
+        return el ? el.value.trim() : "";
       }
 
-      function callGemini(prompt, extraSystemText, retryCount) {
+      function callGeminiViaServer(prompt, extraSystemText) {
+        return fetch(GEMINI_API_ROUTE, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: prompt, extraSystemText: extraSystemText || "" })
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            if (res.ok && data.text !== undefined) return data.text;
+            throw new Error(data.error || "서버 오류");
+          });
+        });
+      }
+
+      function callGeminiDirect(prompt, extraSystemText, retryCount) {
         retryCount = retryCount || 0;
         var maxRetries = 2;
         var apiKey = getApiKey();
         if (!apiKey) return Promise.reject(new Error("no_api_key"));
 
         var systemText = "당신은 한국어로 답변하는 뉴스 요약/설명 도우미입니다. 주어진 기사 정보만 기반으로 답하고, 모르는 내용은 모른다고 말하세요.";
-        if (extraSystemText) {
-          systemText += "\n\n추가 지시: " + extraSystemText;
-        }
+        if (extraSystemText) systemText += "\n\n추가 지시: " + extraSystemText;
 
         var body = {
-          contents: [
-            {
-              parts: [{ text: prompt }]
-            }
-          ],
-          systemInstruction: {
-            parts: [{ text: systemText }]
-          }
+          contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: { parts: [{ text: systemText }] }
         };
 
         function doFetch() {
           return fetch(GEMINI_API_URL + "?key=" + encodeURIComponent(apiKey), {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
           });
         }
 
         function handleResponse(res) {
-          if (res.ok) {
-            return res.json();
-          }
+          if (res.ok) return res.json();
           return res.text().then(function (text) {
             var errorMsg = "Gemini API 오류 (상태: " + res.status + ")";
             var retrySeconds = null;
@@ -673,12 +672,8 @@
                 errorMsg += ": " + errData.error.message;
                 var match = (errData.error.message || "").match(/retry in (\d+(?:\.\d+)?)\s*s/i);
                 if (match) retrySeconds = parseFloat(match[1]);
-              } else {
-                errorMsg += ": " + text.substring(0, 200);
-              }
-            } catch (e) {
-              errorMsg += ": " + text.substring(0, 200);
-            }
+              } else errorMsg += ": " + text.substring(0, 200);
+            } catch (e) { errorMsg += ": " + text.substring(0, 200); }
             var err = new Error(errorMsg);
             err.status = res.status;
             err.retrySeconds = retrySeconds;
@@ -687,39 +682,27 @@
         }
 
         function parseResult(data) {
-          if (data && data.error) {
-            throw new Error("Gemini API 오류: " + (data.error.message || JSON.stringify(data.error)));
-          }
-          var text = data &&
-                     data.candidates &&
-                     data.candidates[0] &&
-                     data.candidates[0].content &&
-                     data.candidates[0].content.parts &&
-                     data.candidates[0].content.parts[0] &&
-                     data.candidates[0].content.parts[0].text;
+          if (data && data.error) throw new Error("Gemini API 오류: " + (data.error.message || JSON.stringify(data.error)));
+          var text = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
           return text || "";
         }
 
-        return doFetch()
-          .then(handleResponse)
-          .then(parseResult)
-          .catch(function (err) {
-            if (err.status === 429 && err.retrySeconds != null && retryCount < maxRetries) {
-              return new Promise(function (resolve, reject) {
-                var ms = Math.min(err.retrySeconds * 1000, 60000);
-                setTimeout(function () {
-                  callGemini(prompt, extraSystemText, retryCount + 1).then(resolve).catch(reject);
-                }, ms);
-              });
-            }
-            if (err.status === 429) {
-              err.message += "\n\n[할당량 초과]\n• 무료 한도가 소진되었을 수 있습니다. 잠시 후 다시 시도하세요.\n• Google AI Studio(https://ai.google.dev)에서 사용량을 확인하세요.";
-            }
-            if (err.message && (err.message.includes("CORS") || err.message.includes("Failed to fetch"))) {
-              throw new Error("CORS 오류: 브라우저에서 직접 호출이 차단되었습니다.");
-            }
-            throw err;
-          });
+        return doFetch().then(handleResponse).then(parseResult).catch(function (err) {
+          if (err.status === 429 && err.retrySeconds != null && retryCount < maxRetries) {
+            return new Promise(function (resolve, reject) {
+              setTimeout(function () { callGeminiDirect(prompt, extraSystemText, retryCount + 1).then(resolve).catch(reject); }, Math.min(err.retrySeconds * 1000, 60000));
+            });
+          }
+          if (err.status === 429) err.message += "\n\n[할당량 초과] 잠시 후 다시 시도하세요.";
+          throw err;
+        });
+      }
+
+      function callGemini(prompt, extraSystemText) {
+        return callGeminiViaServer(prompt, extraSystemText).catch(function (err) {
+          if (getApiKey()) return callGeminiDirect(prompt, extraSystemText);
+          throw new Error("서버 API를 사용할 수 없습니다 (로컬/오프라인). 상단에 Gemini API 키를 입력하거나, Vercel에 배포 후 Environment Variables에 GeminiAPIKey1을 설정하세요. 오류: " + (err.message || err));
+        });
       }
 
       // ===== 기능 1: 전체 뉴스 요약 =====

@@ -45,6 +45,23 @@ python news_chatbot.py
 
 ---
 
+## Vercel 배포
+
+1. [Vercel](https://vercel.com)에 로그인 후 **Add New → Project**에서 이 저장소(또는 폴더)를 연결합니다.
+2. **Project Name**을 **영문 소문자, 숫자, 하이픈(-), 밑줄(_)만** 사용해 지정합니다.  
+   예: `news-chatbot` 또는 `news_chatbot`  
+   한글(챗봇)이나 그 밖의 특수문자는 사용하지 마세요.  
+   → "The name contains invalid characters" 오류는 보통 프로젝트 이름에 한글/특수문자가 들어갈 때 발생합니다.
+3. **Environment Variables** 설정  
+   - **Settings → Environment Variables**에서 변수 추가  
+   - **Name:** `GeminiAPIKey1`  
+   - **Value:** 본인의 Gemini API 키  
+   - 이렇게 하면 배포된 사이트에서는 API 키 입력 없이 AI 요약/대화를 사용할 수 있습니다.
+4. **Deploy**를 누르면 정적 사이트 + 서버리스 API(`/api/gemini`)가 함께 배포됩니다.  
+   `vercel.json`에 `"name": "news-chatbot"`이 들어 있어, 프로젝트 이름을 지정해 두었습니다.
+
+---
+
 ## 확장 아이디어
 
 - 키워드 자동 추천
